@@ -5,9 +5,9 @@ import json
 from discord.ext import commands
 import yt_dlp
 import asyncio
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 
-load_dotenv()
+#load_dotenv()
 
 # Together API Key（請使用新生成的 API Key）
 TOGETHER_API_KEY = os.getenv("together_api_key")
@@ -36,8 +36,29 @@ FFMPEG_OPTIONS = {'options': '-vn'}
 
 queue = []
 
+async def get_most_popular_video(query):
+    """搜尋 YouTube 並返回觀看次數最高的影片 URL"""
+    ydl_opts = {
+        'quiet': True,
+        'default_search': 'ytsearch10'  # 搜尋前 10 個結果
+    }
+
+    def search():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(query, download=False)
+
+    info = await asyncio.to_thread(search)
+
+    if 'entries' in info and len(info['entries']) > 0:
+        sorted_videos = sorted(info['entries'], key=lambda x: x.get('view_count', 0), reverse=True)
+        best_video = sorted_videos[0]  # 觀看次數最高的影片
+        print(best_video['webpage_url'])
+        return best_video['webpage_url']
+
+    return None
+
 async def fetch_related_video(url):
-    """Fetch related video URL from YouTube metadata."""
+    """獲取 YouTube 影片的推薦影片 URL"""
     with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
         info = ydl.extract_info(url, download=False)
         related_videos = info.get('entries', [info])[0].get('related_videos')
@@ -46,10 +67,20 @@ async def fetch_related_video(url):
         return None
 
 @bot.command(name='play')
-async def play(ctx, *, url: str):
+async def play(ctx, *, query: str):
+    """播放歌曲，允許使用 YouTube 連結或關鍵字搜尋"""
+    if "youtube.com" not in query and "youtu.be" not in query:
+        url = await get_most_popular_video(query)
+        if not url:
+            await ctx.send(f"❌ 找不到 `{query}` 的 YouTube 音樂，請嘗試使用更準確的名稱！")
+            return
+    else:
+        url = query  # 如果使用者提供的是 YouTube 連結，直接使用
+
     queue.append(url)
+
     if not ctx.author.voice:
-        await ctx.send("You need to be in a voice channel first!")
+        await ctx.send("❌ 你需要先加入語音頻道！")
         return
 
     voice_channel = ctx.author.voice.channel
@@ -65,36 +96,38 @@ async def play(ctx, *, url: str):
         await play_next(ctx, voice_client)
 
 async def play_next(ctx, voice_client):
+    """播放佇列中的下一首歌曲，若佇列為空則播放相關影片"""
     if queue:
         url = queue.pop(0)
     else:
+        # 嘗試獲取當前播放歌曲的相關影片
         if hasattr(voice_client, 'last_url'):
             url = await fetch_related_video(voice_client.last_url)
             if not url:
-                url = voice_client.last_url  # Replay last song if no related found
-                await ctx.send("No related songs found, replaying the previous song.")
+                url = voice_client.last_url  # 如果沒有推薦，則重播當前歌曲
+                await ctx.send("🔄 沒有找到相關歌曲，重播上一首歌曲。")
             else:
-                await ctx.send(f"Autoplaying related song: {url}")
+                await ctx.send(f"🎶 自動播放相關歌曲: {url}")
         else:
-            await ctx.send("Queue empty and no previous song available.")
+            await ctx.send("✅ 播放清單已空，離開語音頻道。")
             await voice_client.disconnect()
             return
 
-    voice_client.last_url = url
-    await ctx.send(f"Playing: {url}")
+    voice_client.last_url = url  # 記錄目前播放的歌曲 URL
+    await ctx.send(f"🎵 播放中: {url}")
 
-    with yt_dlp.YoutubeDL(YTDLP_OPTIONS) as ydl:
+    with yt_dlp.YoutubeDL({'format': 'bestaudio/best', 'quiet': True}) as ydl:
         info = ydl.extract_info(url, download=False)
         audio_url = info['url']
 
     def after_playback(e):
         if e:
-            print('Playback interrupted:', e)
+            print('播放發生錯誤:', e)
         else:
-            print('Playback finished, starting next song...')
+            print('播放結束，準備下一首...')
             asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
 
-    voice_client.play(discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS), after=after_playback)
+    voice_client.play(discord.FFmpegPCMAudio(audio_url, options='-vn'), after=after_playback)
 
 @bot.command(name='pause')
 async def pause(ctx):
