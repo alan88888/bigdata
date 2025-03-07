@@ -264,12 +264,6 @@ async def draw(ctx, *, prompt):
     else:
         await ctx.send(f"❌ 生成失敗，請稍後再試！\n🔍 API 回應：{response}")
 
-import random
-import discord
-from discord.ext import commands
-
-bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
-
 @bot.command(name='random')
 async def random_number(ctx, *, range_input: str):
     """隨機選擇一個數字，使用 `~` 作為範圍分隔，例如 `!random -50~10`"""
@@ -295,7 +289,6 @@ async def random_number(ctx, *, range_input: str):
 
     except ValueError:
         await ctx.send("⚠️ 請輸入正確的格式，例如 `!random -50~10`")
-
 
 # 啟動機器人
 bot.run(DISCORD_BOT_TOKEN)
