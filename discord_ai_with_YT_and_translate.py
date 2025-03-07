@@ -3,21 +3,30 @@ import discord
 import requests
 import json
 from discord.ext import commands
-import random
+from discord.ui import Button, View
 import yt_dlp
 import asyncio
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv()
 
 # Together API Key（請使用新生成的 API Key）
 TOGETHER_API_KEY = os.getenv("together_api_key")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+AZURE_TRANSLATION_KEY = os.getenv('AZURE_TRANSLATION_KEY')
+AZURE_TRANSLATION_ENDPOINT = os.getenv('AZURE_TRANSLATION_ENDPOINT')
+AZURE_TRANSLATION_REGION = os.getenv('AZURE_TRANSLATION_REGION')
 
 if not DISCORD_BOT_TOKEN:
     raise ValueError("❌ Discord  API Key 未設定，請確認環境變數！")
 if not  TOGETHER_API_KEY:
     raise ValueError("❌ Together API Key 未設定，請確認環境變數！")
+if not AZURE_TRANSLATION_KEY:
+    raise ValueError("❌ Azure Translation Key 未設定，請確認環境變數！")
+if not AZURE_TRANSLATION_ENDPOINT:
+    raise ValueError("❌ Azure Translation Endpoint 未設定，請確認環境變數！")
+if not AZURE_TRANSLATION_REGION:
+    raise ValueError("❌ Azure Translation Region 未設定，請確認環境變數！")
 
 # 啟用 intents
 intents = discord.Intents.default()
@@ -37,51 +46,109 @@ FFMPEG_OPTIONS = {'options': '-vn'}
 
 queue = []
 
-async def get_most_popular_video(query):
-    """搜尋 YouTube 並返回觀看次數最高的影片 URL"""
-    ydl_opts = {
-        'quiet': True,
-        'default_search': 'ytsearch10'  # 搜尋前 10 個結果
-    }
-
-    def search():
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            return ydl.extract_info(query, download=False)
-
-    info = await asyncio.to_thread(search)
-
-    if 'entries' in info and len(info['entries']) > 0:
-        sorted_videos = sorted(info['entries'], key=lambda x: x.get('view_count', 0), reverse=True)
-        best_video = sorted_videos[0]  # 觀看次數最高的影片
-        print(best_video['webpage_url'])
-        return best_video['webpage_url']
-
-    return None
-
 async def fetch_related_video(url):
-    """獲取 YouTube 影片的推薦影片 URL"""
+    """Fetch related video URL from YouTube metadata."""
     with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
         info = ydl.extract_info(url, download=False)
         related_videos = info.get('entries', [info])[0].get('related_videos')
         if related_videos:
             return f"https://www.youtube.com/watch?v={related_videos[0]['id']}"
         return None
+    
+async def translate_text(text, from_lang, to_lang):
+    path = '/translate?api-version=3.0'
+    params = f'&from={from_lang}&to={to_lang}'
+    constructed_url = AZURE_TRANSLATION_ENDPOINT + path + params
+
+    headers = {
+        'Ocp-Apim-Subscription-Key': AZURE_TRANSLATION_KEY,
+        'Ocp-Apim-Subscription-Region': AZURE_TRANSLATION_REGION,
+        'Content-type': 'application/json',
+    }
+
+    body = [{'text': text}]
+
+    response = requests.post(constructed_url, headers=headers, json=body)
+    if response.status_code == 200:
+        result = response.json()
+        return result[0]['translations'][0]['text']
+    else:
+        return None
+    
+class LanguageSelectView(View):
+    def __init__(self):
+        super().__init__(timeout=30) 
+        self.input_lang = None
+        self.output_lang = None
+
+    @discord.ui.button(label="en <-> zh", style=discord.ButtonStyle.primary)
+    async def en_zh(self, interaction: discord.Interaction, button: Button):
+        self.input_lang = "en"
+        self.output_lang = "zh"
+        await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="zh <-> jp", style=discord.ButtonStyle.primary)
+    async def zh_jp(self, interaction: discord.Interaction, button: Button):
+        self.input_lang = "zh"
+        self.output_lang = "ja" 
+        await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="en <-> jp", style=discord.ButtonStyle.primary)
+    async def en_jp(self, interaction: discord.Interaction, button: Button):
+        self.input_lang = "en"
+        self.output_lang = "ja"
+        await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="自行輸入", style=discord.ButtonStyle.secondary)
+    async def custom(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("請輸入輸入語言和輸出語言（例如：en zh）：", ephemeral=True)
+        try:
+            msg = await bot.wait_for(
+                "message",
+                check=lambda m: m.author == interaction.user and m.channel == interaction.channel,
+                timeout=30
+            )
+            languages = msg.content.split()
+            if len(languages) != 2:
+                await interaction.followup.send("請輸入兩個語言代碼。", ephemeral=True)
+                return
+            self.input_lang, self.output_lang = languages
+            await interaction.followup.send("請輸入要翻譯的文字：", ephemeral=True)
+            self.stop()
+        except asyncio.TimeoutError:
+            await interaction.followup.send("等待回應超時，請重新開始。", ephemeral=True)
+
+@bot.command()
+async def translate(ctx):
+    view = LanguageSelectView()
+    await ctx.send("請選擇語言對或自行輸入：", view=view)
+    await view.wait()
+    if view.input_lang and view.output_lang:
+        try:
+            msg = await bot.wait_for(
+                "message",
+                check=lambda m: m.author == ctx.author and m.channel == ctx.channel,
+                timeout=30
+            )
+            text_to_translate = msg.content
+            translation = await translate_text(text_to_translate, view.input_lang, view.output_lang)
+            if translation:
+                await ctx.send(f"翻譯結果：{translation}")
+            else:
+                await ctx.send("翻譯失敗，請檢查語言代碼或稍後再試。")
+        except asyncio.TimeoutError:
+            await ctx.send("等待回應超時，請重新開始。")
+    else:
+        await ctx.send("未選擇語言對，請重新開始。")
 
 @bot.command(name='play')
-async def play(ctx, *, query: str):
-    """播放歌曲，允許使用 YouTube 連結或關鍵字搜尋"""
-    if "youtube.com" not in query and "youtu.be" not in query:
-        url = await get_most_popular_video(query)
-        if not url:
-            await ctx.send(f"❌ 找不到 `{query}` 的 YouTube 音樂，請嘗試使用更準確的名稱！")
-            return
-    else:
-        url = query  # 如果使用者提供的是 YouTube 連結，直接使用
-
+async def play(ctx, *, url: str):
     queue.append(url)
-
     if not ctx.author.voice:
-        await ctx.send("❌ 你需要先加入語音頻道！")
+        await ctx.send("You need to be in a voice channel first!")
         return
 
     voice_channel = ctx.author.voice.channel
@@ -97,38 +164,36 @@ async def play(ctx, *, query: str):
         await play_next(ctx, voice_client)
 
 async def play_next(ctx, voice_client):
-    """播放佇列中的下一首歌曲，若佇列為空則播放相關影片"""
     if queue:
         url = queue.pop(0)
     else:
-        # 嘗試獲取當前播放歌曲的相關影片
         if hasattr(voice_client, 'last_url'):
             url = await fetch_related_video(voice_client.last_url)
             if not url:
-                url = voice_client.last_url  # 如果沒有推薦，則重播當前歌曲
-                await ctx.send("🔄 沒有找到相關歌曲，重播上一首歌曲。")
+                url = voice_client.last_url  # Replay last song if no related found
+                await ctx.send("No related songs found, replaying the previous song.")
             else:
-                await ctx.send(f"🎶 自動播放相關歌曲: {url}")
+                await ctx.send(f"Autoplaying related song: {url}")
         else:
-            await ctx.send("✅ 播放清單已空，離開語音頻道。")
+            await ctx.send("Queue empty and no previous song available.")
             await voice_client.disconnect()
             return
 
-    voice_client.last_url = url  # 記錄目前播放的歌曲 URL
-    await ctx.send(f"🎵 播放中: {url}")
+    voice_client.last_url = url
+    await ctx.send(f"Playing: {url}")
 
-    with yt_dlp.YoutubeDL({'format': 'bestaudio/best', 'quiet': True}) as ydl:
+    with yt_dlp.YoutubeDL(YTDLP_OPTIONS) as ydl:
         info = ydl.extract_info(url, download=False)
         audio_url = info['url']
 
     def after_playback(e):
         if e:
-            print('播放發生錯誤:', e)
+            print('Playback interrupted:', e)
         else:
-            print('播放結束，準備下一首...')
+            print('Playback finished, starting next song...')
             asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
 
-    voice_client.play(discord.FFmpegPCMAudio(audio_url, options='-vn'), after=after_playback)
+    voice_client.play(discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS), after=after_playback)
 
 @bot.command(name='pause')
 async def pause(ctx):
@@ -263,32 +328,5 @@ async def draw(ctx, *, prompt):
         await ctx.send(embed=embed)
     else:
         await ctx.send(f"❌ 生成失敗，請稍後再試！\n🔍 API 回應：{response}")
-
-@bot.command(name='random')
-async def random_number(ctx, *, range_input: str):
-    """隨機選擇一個數字，使用 `~` 作為範圍分隔，例如 `!random -50~10`"""
-    try:
-        # 移除空格，然後用 `~` 分隔數字範圍
-        parts = range_input.replace(" ", "").split('~')
-
-        # 檢查輸入是否正確
-        if len(parts) != 2:
-            raise ValueError
-
-        # 轉換成整數
-        start, end = int(parts[0]), int(parts[1])
-
-        # 確保範圍正確（開始值必須小於結束值）
-        if start >= end:
-            await ctx.send("⚠️ 錯誤：請確保起始數字小於結束數字，例如 `!random -50~10`")
-            return
-
-        # 隨機選擇數字
-        chosen_number = random.randint(start, end)
-        await ctx.send(f"🎲 隨機選擇的數字是：**{chosen_number}**（範圍 {start} ~ {end}）")
-
-    except ValueError:
-        await ctx.send("⚠️ 請輸入正確的格式，例如 `!random -50~10`")
-
 # 啟動機器人
 bot.run(DISCORD_BOT_TOKEN)
