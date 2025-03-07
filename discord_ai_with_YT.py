@@ -3,11 +3,12 @@ import discord
 import requests
 import json
 from discord.ext import commands
+import random
 import yt_dlp
 import asyncio
-#from dotenv import load_dotenv
+from dotenv import load_dotenv
 
-#load_dotenv()
+load_dotenv(override=True)
 
 # Together API Key（請使用新生成的 API Key）
 TOGETHER_API_KEY = os.getenv("together_api_key")
@@ -262,5 +263,23 @@ async def draw(ctx, *, prompt):
         await ctx.send(embed=embed)
     else:
         await ctx.send(f"❌ 生成失敗，請稍後再試！\n🔍 API 回應：{response}")
+
+@bot.command(name='random')
+async def random_number(ctx, range_input: str):
+    """隨機選擇一個數字，使用格式：!random 1-99"""
+    try:
+        # 解析範圍
+        start, end = map(int, range_input.split('-'))
+
+        if start >= end:
+            await ctx.send("⚠️ 錯誤：請確保起始數字小於結束數字，例如 `!random 1-99`")
+            return
+
+        # 隨機選擇一個數字
+        chosen_number = random.randint(start, end)
+        await ctx.send(f"🎲 隨機選擇的數字是：**{chosen_number}**（範圍 {start}-{end}）")
+    except ValueError:
+        await ctx.send("⚠️ 請輸入正確的格式，例如 `!random 1-99`")
+
 # 啟動機器人
 bot.run(DISCORD_BOT_TOKEN)
