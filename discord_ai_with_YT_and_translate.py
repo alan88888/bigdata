@@ -9,8 +9,6 @@ import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# Together API Key（請使用新生成的 API Key）
 TOGETHER_API_KEY = os.getenv("together_api_key")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 AZURE_TRANSLATION_KEY = os.getenv('AZURE_TRANSLATION_KEY')
