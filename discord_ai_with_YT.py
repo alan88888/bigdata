@@ -5,9 +5,9 @@ import json
 from discord.ext import commands
 import yt_dlp
 import asyncio
-# from dotenv import load_dotenv
+from dotenv import load_dotenv
 
-# load_dotenv()
+load_dotenv()
 
 # Together API Key（請使用新生成的 API Key）
 TOGETHER_API_KEY = os.getenv("together_api_key")
@@ -161,29 +161,25 @@ async def chat(ctx, *, message):
             "User-Agent": "curl/7.68.0"
         }
         data = {
-            "model": "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",  # 確保使用 Together AI 確認可用的模型
-            "messages": [{"role": "user", "content": message}],
+            "model": "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
+            "messages": [
+                {"role": "system", "content": "請根據用戶輸入的語言回應，並使用相同的語言。"},
+                {"role": "user", "content": message}
+            ],
             "temperature": 0.7,
             "max_tokens": 256
         }
 
         response = requests.post(url, headers=headers, json=data)
         response_data = response.json()
-
-        # **新增這一行，顯示完整的 API 回應**
         print(response_data)
-
-        # 檢查 API 是否回傳有效回應
-        if response.status_code == 200 and "choices" in response_data:
-            ai_reply = response_data["choices"][0]["message"]["content"]
+        if 'choices' in response_data and len(response_data['choices']) > 0:
+            reply = response_data['choices'][0]['message']['content']
+            await ctx.send(reply)
         else:
-            ai_reply = f"❌ API 錯誤：{response_data}"  # 顯示完整錯誤
-
+            await ctx.send("無法獲取回應，請稍後再試。")
     except Exception as e:
-        print(f"❌ Together API 錯誤：{e}")
-        ai_reply = "抱歉，我無法處理你的請求，請稍後再試。"
-
-    await ctx.send(f"{ai_reply}")
+        await ctx.send(f"發生錯誤：{str(e)}")
 #shorten url tinyurl-----------------
 def shorten_url_tinyurl(long_url):
     """使用 TinyURL 來縮短網址"""
