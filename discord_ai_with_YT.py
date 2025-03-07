@@ -264,22 +264,38 @@ async def draw(ctx, *, prompt):
     else:
         await ctx.send(f"❌ 生成失敗，請稍後再試！\n🔍 API 回應：{response}")
 
-@bot.command(name='random')
-async def random_number(ctx, range_input: str):
-    """隨機選擇一個數字，使用格式：!random 1-99"""
-    try:
-        # 解析範圍
-        start, end = map(int, range_input.split('-'))
+import random
+import discord
+from discord.ext import commands
 
+bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
+
+@bot.command(name='random')
+async def random_number(ctx, *, range_input: str):
+    """隨機選擇一個數字，使用 `~` 作為範圍分隔，例如 `!random -50~10`"""
+    try:
+        # 移除空格，然後用 `~` 分隔數字範圍
+        parts = range_input.replace(" ", "").split('~')
+
+        # 檢查輸入是否正確
+        if len(parts) != 2:
+            raise ValueError
+
+        # 轉換成整數
+        start, end = int(parts[0]), int(parts[1])
+
+        # 確保範圍正確（開始值必須小於結束值）
         if start >= end:
-            await ctx.send("⚠️ 錯誤：請確保起始數字小於結束數字，例如 `!random 1-99`")
+            await ctx.send("⚠️ 錯誤：請確保起始數字小於結束數字，例如 `!random -50~10`")
             return
 
-        # 隨機選擇一個數字
+        # 隨機選擇數字
         chosen_number = random.randint(start, end)
-        await ctx.send(f"🎲 隨機選擇的數字是：**{chosen_number}**（範圍 {start}-{end}）")
+        await ctx.send(f"🎲 隨機選擇的數字是：**{chosen_number}**（範圍 {start} ~ {end}）")
+
     except ValueError:
-        await ctx.send("⚠️ 請輸入正確的格式，例如 `!random 1-99`")
+        await ctx.send("⚠️ 請輸入正確的格式，例如 `!random -50~10`")
+
 
 # 啟動機器人
 bot.run(DISCORD_BOT_TOKEN)
