@@ -7,10 +7,15 @@ from discord.ui import Button, View
 import yt_dlp
 import asyncio
 from dotenv import load_dotenv
+from googleapiclient.discovery import build
 
-load_dotenv()
+
+load_dotenv(override=True)
+
+# Together API Key（請使用新生成的 API Key）
 TOGETHER_API_KEY = os.getenv("together_api_key")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  
 AZURE_TRANSLATION_KEY = os.getenv('AZURE_TRANSLATION_KEY')
 AZURE_TRANSLATION_ENDPOINT = os.getenv('AZURE_TRANSLATION_ENDPOINT')
 AZURE_TRANSLATION_REGION = os.getenv('AZURE_TRANSLATION_REGION')
@@ -36,23 +41,54 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 YTDLP_OPTIONS = {
     'format': 'bestaudio/best',
     'quiet': True,
+    'extract_flat': True,  # Prevents downloading extra metadata
     'noplaylist': True,
-    'default_search': 'auto',
+    'default_search': 'ytsearch',
 }
 
-FFMPEG_OPTIONS = {'options': '-vn'}
+
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn'
+}
+
+youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 
 queue = []
+search_cache = {}
+async def get_most_popular_video(query):
+    """Use YouTube API to get the most viewed video for a search query"""
+    try:
+        request = youtube.search().list(
+            q=query,
+            part="snippet",
+            maxResults=5,  # Fetch 5 results for comparison
+            type="video",
+            order="viewCount"
+        )
+        response = request.execute()
+
+        if not response["items"]:
+            return None
+        
+        best_video = response["items"][0]
+        video_url = f"https://www.youtube.com/watch?v={best_video['id']['videoId']}"
+        
+        print(f"Selected video: {video_url}")
+        return video_url
+    except Exception as e:
+        print(f"Error searching YouTube: {e}")
+        return None
 
 async def fetch_related_video(url):
-    """Fetch related video URL from YouTube metadata."""
+    """獲取 YouTube 影片的推薦影片 URL"""
     with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
         info = ydl.extract_info(url, download=False)
         related_videos = info.get('entries', [info])[0].get('related_videos')
         if related_videos:
             return f"https://www.youtube.com/watch?v={related_videos[0]['id']}"
         return None
-    
+
 async def translate_text(text, from_lang, to_lang):
     path = '/translate?api-version=3.0'
     params = f'&from={from_lang}&to={to_lang}'
@@ -72,7 +108,8 @@ async def translate_text(text, from_lang, to_lang):
         return result[0]['translations'][0]['text']
     else:
         return None
-    
+
+
 class LanguageSelectView(View):
     def __init__(self):
         super().__init__(timeout=30) 
@@ -119,6 +156,69 @@ class LanguageSelectView(View):
         except asyncio.TimeoutError:
             await interaction.followup.send("等待回應超時，請重新開始。", ephemeral=True)
 
+
+
+@bot.command(name='play')
+async def play(ctx, *, query: str):
+    """播放歌曲，允許使用 YouTube 連結或關鍵字搜尋"""
+    if "youtube.com" not in query and "youtu.be" not in query:
+        url = await get_most_popular_video(query)
+        if not url:
+            await ctx.send(f"❌ 找不到 `{query}` 的 YouTube 音樂，請嘗試使用更準確的名稱！")
+            return
+    else:
+        url = query  # 如果使用者提供的是 YouTube 連結，直接使用
+
+    queue.append(url)
+
+    if not ctx.author.voice:
+        await ctx.send("❌ 你需要先加入語音頻道！")
+        return
+
+    voice_channel = ctx.author.voice.channel
+    voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
+
+    if voice_client and voice_client.is_connected():
+        if voice_client.channel != voice_channel:
+            await voice_client.move_to(voice_channel)
+    else:
+        voice_client = await voice_channel.connect()
+
+    if not voice_client.is_playing():
+        await play_next(ctx, voice_client)
+
+async def play_next(ctx, voice_client):
+    """Plays the next song in the queue and ensures completion"""
+    if not queue:
+        await ctx.send("✅ Queue is empty. Disconnecting...")
+        await voice_client.disconnect()
+        return
+
+    url = queue.pop(0)
+    voice_client.last_url = url  # Store last played URL
+    await ctx.send(f"🎵 Now playing: {url}")
+
+    def get_audio_url():
+        with yt_dlp.YoutubeDL({'format': 'bestaudio/best', 'quiet': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return info['url']
+
+    audio_url = await asyncio.to_thread(get_audio_url)  # Fetch in a separate thread
+
+    def after_playback(e):
+        if e:
+            print(f"Playback error: {e}")
+        asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
+
+    # Ensure FFmpeg does not get interrupted
+    source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS)
+    voice_client.play(source, after=after_playback)
+
+    # 🔹 Wait for the song to finish before allowing another command
+    while voice_client.is_playing() or voice_client.is_paused():
+        await asyncio.sleep(1)
+
+
 @bot.command()
 async def translate(ctx):
     view = LanguageSelectView()
@@ -142,56 +242,6 @@ async def translate(ctx):
     else:
         await ctx.send("未選擇語言對，請重新開始。")
 
-@bot.command(name='play')
-async def play(ctx, *, url: str):
-    queue.append(url)
-    if not ctx.author.voice:
-        await ctx.send("You need to be in a voice channel first!")
-        return
-
-    voice_channel = ctx.author.voice.channel
-    voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
-
-    if voice_client and voice_client.is_connected():
-        if voice_client.channel != voice_channel:
-            await voice_client.move_to(voice_channel)
-    else:
-        voice_client = await voice_channel.connect()
-
-    if not voice_client.is_playing():
-        await play_next(ctx, voice_client)
-
-async def play_next(ctx, voice_client):
-    if queue:
-        url = queue.pop(0)
-    else:
-        if hasattr(voice_client, 'last_url'):
-            url = await fetch_related_video(voice_client.last_url)
-            if not url:
-                url = voice_client.last_url  # Replay last song if no related found
-                await ctx.send("No related songs found, replaying the previous song.")
-            else:
-                await ctx.send(f"Autoplaying related song: {url}")
-        else:
-            await ctx.send("Queue empty and no previous song available.")
-            await voice_client.disconnect()
-            return
-
-    voice_client.last_url = url
-    await ctx.send(f"Playing: {url}")
-
-    with yt_dlp.YoutubeDL(YTDLP_OPTIONS) as ydl:
-        info = ydl.extract_info(url, download=False)
-        audio_url = info['url']
-
-    def after_playback(e):
-        if e:
-            print('Playback interrupted:', e)
-        else:
-            print('Playback finished, starting next song...')
-            asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
-
-    voice_client.play(discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS), after=after_playback)
 
 @bot.command(name='pause')
 async def pause(ctx):
@@ -326,5 +376,32 @@ async def draw(ctx, *, prompt):
         await ctx.send(embed=embed)
     else:
         await ctx.send(f"❌ 生成失敗，請稍後再試！\n🔍 API 回應：{response}")
+
+@bot.command(name='random')
+async def random_number(ctx, *, range_input: str):
+    """隨機選擇一個數字，使用 `~` 作為範圍分隔，例如 `!random -50~10`"""
+    try:
+        # 移除空格，然後用 `~` 分隔數字範圍
+        parts = range_input.replace(" ", "").split('~')
+
+        # 檢查輸入是否正確
+        if len(parts) != 2:
+            raise ValueError
+
+        # 轉換成整數
+        start, end = int(parts[0]), int(parts[1])
+
+        # 確保範圍正確（開始值必須小於結束值）
+        if start >= end:
+            await ctx.send("⚠️ 錯誤：請確保起始數字小於結束數字，例如 `!random -50~10`")
+            return
+
+        # 隨機選擇數字
+        chosen_number = random.randint(start, end)
+        await ctx.send(f"🎲 隨機選擇的數字是：**{chosen_number}**（範圍 {start} ~ {end}）")
+
+    except ValueError:
+        await ctx.send("⚠️ 請輸入正確的格式，例如 `!random -50~10`")
+
 # 啟動機器人
 bot.run(DISCORD_BOT_TOKEN)
