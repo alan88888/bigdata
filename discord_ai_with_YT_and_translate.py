@@ -110,6 +110,47 @@ async def translate_text(text, from_lang, to_lang):
         return None
 
 
+class MusicControlView(View):
+    def __init__(self, ctx, voice_client):
+        super().__init__(timeout=None)  # No timeout for persistent buttons
+        self.ctx = ctx
+        self.voice_client = voice_client
+
+    @discord.ui.button(label="⏸️ Pause", style=discord.ButtonStyle.primary)
+    async def pause_button(self, interaction: discord.Interaction, button: Button):
+        if self.voice_client and self.voice_client.is_playing():
+            self.voice_client.pause()
+            await interaction.response.send_message("⏸️ Playback paused.", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ No audio is playing!", ephemeral=True)
+
+    @discord.ui.button(label="▶️ Resume", style=discord.ButtonStyle.green)
+    async def resume_button(self, interaction: discord.Interaction, button: Button):
+        if self.voice_client and self.voice_client.is_paused():
+            self.voice_client.resume()
+            await interaction.response.send_message("▶️ Playback resumed.", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ Audio is not paused!", ephemeral=True)
+
+    @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction: discord.Interaction, button: Button):
+        if self.voice_client and self.voice_client.is_playing():
+            self.voice_client.stop()  # Triggers the next song in the queue
+            await interaction.response.send_message("⏭️ Skipping to the next song.", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ No audio is playing!", ephemeral=True)
+
+    @discord.ui.button(label="⏹️ Stop", style=discord.ButtonStyle.danger)
+    async def stop_button(self, interaction: discord.Interaction, button: Button):
+        queue.clear()
+        if self.voice_client and self.voice_client.is_connected():
+            await self.voice_client.disconnect()
+            await interaction.response.send_message("⏹️ Stopped playing and disconnected.", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ Bot is not in a voice channel!", ephemeral=True)
+
+
+
 class LanguageSelectView(View):
     def __init__(self):
         super().__init__(timeout=30) 
@@ -160,7 +201,7 @@ class LanguageSelectView(View):
 
 @bot.command(name='play')
 async def play(ctx, *, query: str):
-    """播放歌曲，允許使用 YouTube 連結或關鍵字搜尋"""
+    """播放歌曲，允許使用 YouTube 連結或關鍵字搜尋，並提供播放控制按鈕"""
     if "youtube.com" not in query and "youtu.be" not in query:
         url = await get_most_popular_video(query)
         if not url:
@@ -184,6 +225,16 @@ async def play(ctx, *, query: str):
     else:
         voice_client = await voice_channel.connect()
 
+    # Create music control buttons
+    view = MusicControlView(ctx, voice_client)
+
+    # Send a message with embedded buttons
+    embed = discord.Embed(title="🎶 Now Playing", description=f"[Click here to watch]({url})", color=discord.Color.blue())
+    embed.set_footer(text="Use the buttons below to control the playback.")
+
+    await ctx.send(embed=embed, view=view)
+
+    # Start playing if nothing is currently playing
     if not voice_client.is_playing():
         await play_next(ctx, voice_client)
 
@@ -263,6 +314,7 @@ async def resume(ctx):
 
 @bot.command(name='next')
 async def next_song(ctx):
+    
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
     if voice_client and voice_client.is_playing():
         voice_client.stop()
