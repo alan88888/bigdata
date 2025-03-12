@@ -15,22 +15,22 @@ load_dotenv(override=True)
 # Together API Key（請使用新生成的 API Key）
 TOGETHER_API_KEY = os.getenv("together_api_key")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  
-AZURE_TRANSLATION_KEY = os.getenv('AZURE_TRANSLATION_KEY')
-AZURE_TRANSLATION_ENDPOINT = os.getenv('AZURE_TRANSLATION_ENDPOINT')
-AZURE_TRANSLATION_REGION = os.getenv('AZURE_TRANSLATION_REGION')
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+#AZURE_TRANSLATION_KEY = os.getenv('AZURE_TRANSLATION_KEY')
+#AZURE_TRANSLATION_ENDPOINT = os.getenv('AZURE_TRANSLATION_ENDPOINT')
+#AZURE_TRANSLATION_REGION = os.getenv('AZURE_TRANSLATION_REGION')
 
 if not DISCORD_BOT_TOKEN:
     raise ValueError("❌ Discord  API Key 未設定，請確認環境變數！")
 if not  TOGETHER_API_KEY:
     raise ValueError("❌ Together API Key 未設定，請確認環境變數！")
-if not AZURE_TRANSLATION_KEY:
+'''if not AZURE_TRANSLATION_KEY:
     raise ValueError("❌ Azure Translation Key 未設定，請確認環境變數！")
 if not AZURE_TRANSLATION_ENDPOINT:
     raise ValueError("❌ Azure Translation Endpoint 未設定，請確認環境變數！")
 if not AZURE_TRANSLATION_REGION:
     raise ValueError("❌ Azure Translation Region 未設定，請確認環境變數！")
-
+'''
 # 啟用 intents
 intents = discord.Intents.default()
 intents.message_content = True  # 需要啟用以讀取訊息
@@ -57,27 +57,38 @@ youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 queue = []
 search_cache = {}
 async def get_most_popular_video(query):
-    """Use YouTube API to get the most viewed video for a search query"""
+    """搜尋與 `query` 最相關的影片，然後選擇觀看次數最高的"""
     try:
-        request = youtube.search().list(
+        # 1️⃣ 先搜尋與 `query` 相關的影片
+        search_response = youtube.search().list(
             q=query,
-            part="snippet",
-            maxResults=5,  # Fetch 5 results for comparison
-            type="video",
-            order="viewCount"
-        )
-        response = request.execute()
+            part="id",
+            maxResults=5,  # 取得 5 部影片
+            type="video"
+        ).execute()
 
-        if not response["items"]:
+        if not search_response["items"]:
             return None
-        
-        best_video = response["items"][0]
-        video_url = f"https://www.youtube.com/watch?v={best_video['id']['videoId']}"
-        
-        print(f"Selected video: {video_url}")
+
+        # 取得所有影片的 videoId
+        video_ids = [item["id"]["videoId"] for item in search_response["items"]]
+
+        # 2️⃣ 查詢這些影片的觀看次數
+        video_details = youtube.videos().list(
+            id=",".join(video_ids),
+            part="statistics"
+        ).execute()
+
+        # 根據觀看次數排序
+        best_video = max(video_details["items"], key=lambda x: int(x["statistics"]["viewCount"]))
+
+        # 取得最高觀看數的影片
+        video_url = f"https://www.youtube.com/watch?v={best_video['id']}"
+
+        print(f"🎥 選擇的影片: {video_url}")
         return video_url
     except Exception as e:
-        print(f"Error searching YouTube: {e}")
+        print(f"❌ YouTube API 錯誤: {e}")
         return None
 
 async def fetch_related_video(url):
@@ -89,7 +100,7 @@ async def fetch_related_video(url):
             return f"https://www.youtube.com/watch?v={related_videos[0]['id']}"
         return None
 
-async def translate_text(text, from_lang, to_lang):
+'''async def translate_text(text, from_lang, to_lang):
     path = '/translate?api-version=3.0'
     params = f'&from={from_lang}&to={to_lang}'
     constructed_url = AZURE_TRANSLATION_ENDPOINT + path + params
@@ -108,7 +119,7 @@ async def translate_text(text, from_lang, to_lang):
         return result[0]['translations'][0]['text']
     else:
         return None
-
+'''
 
 class MusicControlView(View):
     def __init__(self, ctx, voice_client):
@@ -150,10 +161,10 @@ class MusicControlView(View):
             await interaction.response.send_message("⚠️ Bot is not in a voice channel!", ephemeral=True)
 
 
-
+'''
 class LanguageSelectView(View):
     def __init__(self):
-        super().__init__(timeout=30) 
+        super().__init__(timeout=30)
         self.input_lang = None
         self.output_lang = None
 
@@ -167,7 +178,7 @@ class LanguageSelectView(View):
     @discord.ui.button(label="zh <-> jp", style=discord.ButtonStyle.primary)
     async def zh_jp(self, interaction: discord.Interaction, button: Button):
         self.input_lang = "zh"
-        self.output_lang = "ja" 
+        self.output_lang = "ja"
         await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
         self.stop()
 
@@ -196,7 +207,7 @@ class LanguageSelectView(View):
             self.stop()
         except asyncio.TimeoutError:
             await interaction.followup.send("等待回應超時，請重新開始。", ephemeral=True)
-
+'''
 
 
 @bot.command(name='play')
@@ -269,7 +280,7 @@ async def play_next(ctx, voice_client):
     while voice_client.is_playing() or voice_client.is_paused():
         await asyncio.sleep(1)
 
-
+'''
 @bot.command()
 async def translate(ctx):
     view = LanguageSelectView()
@@ -293,7 +304,7 @@ async def translate(ctx):
     else:
         await ctx.send("未選擇語言對，請重新開始。")
 
-
+'''
 @bot.command(name='pause')
 async def pause(ctx):
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
@@ -314,7 +325,7 @@ async def resume(ctx):
 
 @bot.command(name='next')
 async def next_song(ctx):
-    
+
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
     if voice_client and voice_client.is_playing():
         voice_client.stop()
