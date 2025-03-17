@@ -2,12 +2,16 @@ import os
 import discord
 import requests
 import json
+import random
 from discord.ext import commands
 from discord.ui import Button, View
 import yt_dlp
 import asyncio
+import sqlite3
+import datetime
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 
 load_dotenv(override=True)
@@ -465,6 +469,117 @@ async def random_number(ctx, *, range_input: str):
 
     except ValueError:
         await ctx.send("⚠️ 請輸入正確的格式，例如 `!random -50~10`")
+
+
+#--------- SCHEDULE FUNCTIONS ---------#
+# 初始化行程資料庫
+conn = sqlite3.connect("schedule.db")
+cursor = conn.cursor()
+cursor.execute('''CREATE TABLE IF NOT EXISTS schedules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    time TEXT,
+                    event TEXT,
+                    remind_before INTEGER
+                 )''')
+conn.commit()
+
+# 啟動排程器
+scheduler = AsyncIOScheduler()
+
+# 📌 確保 Scheduler 在 asyncio 事件迴圈內啟動
+@bot.event
+async def on_ready():
+    print(f"✅ 已登入 Discord！目前登入身分：{bot.user}")
+    if not scheduler.running:
+        asyncio.create_task(start_scheduler())  # 確保 Scheduler 在事件迴圈中啟動
+
+async def start_scheduler():
+    scheduler.start()
+
+
+# 📌 指令：新增行程
+@bot.command()
+async def add(ctx):
+    await ctx.send("📅 請輸入你的行程（格式：MM/DD HH:MM 事件）")
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    try:
+        msg = await bot.wait_for("message", check=check, timeout=60)
+        parts = msg.content.split(" ", 2)
+        if len(parts) < 3:
+            await ctx.send("⚠️ 格式錯誤！請使用 'MM/DD HH:MM 事件'")
+            return
+        
+        # 解析時間
+        date_str = f"{datetime.datetime.now().year}/{parts[0]} {parts[1]}"
+        event_time = datetime.datetime.strptime(date_str, "%Y/%m/%d %H:%M")
+        event_name = parts[2]
+
+        await ctx.send("🔔 是否需要提醒？（是/否）")
+        remind_msg = await bot.wait_for("message", check=check, timeout=30)
+
+        remind_before = 0
+        if remind_msg.content.strip().lower() in ["是", "yes"]:
+            await ctx.send("⏳ 請輸入提前幾分鐘提醒：")
+            remind_time = await bot.wait_for("message", check=check, timeout=30)
+            remind_before = int(remind_time.content)
+
+        # 存入資料庫
+        cursor.execute("INSERT INTO schedules (user_id, time, event, remind_before) VALUES (?, ?, ?, ?)",
+                       (ctx.author.id, event_time.strftime("%Y-%m-%d %H:%M"), event_name, remind_before))
+        conn.commit()
+
+        await ctx.send(f"✅ 行程已新增：{event_time.strftime('%m/%d %H:%M')} {event_name}")
+        
+        # 設定提醒
+        if remind_before > 0:
+            remind_time = event_time - datetime.timedelta(minutes=remind_before)
+            scheduler.add_job(send_reminder, "date", run_date=remind_time, args=[ctx, event_time, event_name])
+
+    except asyncio.TimeoutError:
+        await ctx.send("⏳ 超時未輸入，請重新輸入指令！")
+
+# 📌 指令：查看行程
+@bot.command()
+async def schedule(ctx):
+    cursor.execute("SELECT time, event FROM schedules WHERE user_id = ? ORDER BY time ASC", (ctx.author.id,))
+    schedules = cursor.fetchall()
+
+    if not schedules:
+        await ctx.send("📭 目前沒有行程")
+    else:
+        msg = "**📅 你的行程：**\n" + "\n".join([f"📌 {s[0]} - {s[1]}" for s in schedules])
+        await ctx.send(msg)
+
+# 📌 指令：刪除行程
+@bot.command()
+async def delete(ctx):
+    await ctx.send("📌 請輸入要刪除的行程編號（使用 `!schedule` 查看編號）")
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    try:
+        msg = await bot.wait_for("message", check=check, timeout=30)
+        event_id = int(msg.content)
+
+        cursor.execute("DELETE FROM schedules WHERE rowid = ? AND user_id = ?", (event_id, ctx.author.id))
+        conn.commit()
+
+        if cursor.rowcount > 0:
+            await ctx.send("✅ 行程已刪除！")
+        else:
+            await ctx.send("⚠️ 找不到該行程，請確認編號是否正確！")
+
+    except asyncio.TimeoutError:
+        await ctx.send("⏳ 超時未輸入，請重新輸入指令！")
+
+# 📌 提醒函式
+async def send_reminder(ctx, event_time, event_name):
+    await ctx.send(f"🔔 提醒：{event_name} 將在 {event_time.strftime('%H:%M')} 開始！")
 
 # 啟動機器人
 bot.run(DISCORD_BOT_TOKEN)
