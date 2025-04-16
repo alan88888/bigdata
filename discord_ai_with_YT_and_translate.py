@@ -14,9 +14,9 @@ from googleapiclient.discovery import build
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import requests
 from bs4 import BeautifulSoup
-from sumy.parsers.plaintext import PlaintextParser
-from sumy.nlp.tokenizers import Tokenizer
-from sumy.summarizers.lsa import LsaSummarizer
+# from sumy.parsers.plaintext import PlaintextParser
+# from sumy.nlp.tokenizers import Tokenizer
+# from sumy.summarizers.lsa import LsaSummarizer
 
 
 load_dotenv(override=True)
@@ -48,6 +48,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 bot.help_command = None # 這東西查document查了1小時..........................................................................................哭阿!
 
+
+
+# =================== HELP ====================
 @bot.command(name='help')
 async def help(ctx):
     embed = discord.Embed(
@@ -107,8 +110,7 @@ async def help(ctx):
     await ctx.send(embed=embed)
 
 
-
-#YOUTUBE 設定
+# =================== YOUTUBE ====================
 YTDLP_OPTIONS = {
     'format': 'bestaudio/best[ext=m4a]/bestaudio/best[ext=webm]/bestaudio',  # Prefer m4a, then webm
     'quiet': True,
@@ -177,26 +179,6 @@ async def fetch_related_video(url):
         related_videos = info.get('entries', [info])[0].get('related_videos')
         if related_videos:
             return f"https://www.youtube.com/watch?v={related_videos[0]['id']}"
-        return None
-
-async def translate_text(text, from_lang, to_lang):
-    path = '/translate?api-version=3.0'
-    params = f'&from={from_lang}&to={to_lang}'
-    constructed_url = AZURE_TRANSLATION_ENDPOINT + path + params
-
-    headers = {
-        'Ocp-Apim-Subscription-Key': AZURE_TRANSLATION_KEY,
-        'Ocp-Apim-Subscription-Region': AZURE_TRANSLATION_REGION,
-        'Content-type': 'application/json',
-    }
-
-    body = [{'text': text}]
-
-    response = requests.post(constructed_url, headers=headers, json=body)
-    if response.status_code == 200:
-        result = response.json()
-        return result[0]['translations'][0]['text']
-    else:
         return None
 
 
@@ -311,54 +293,6 @@ class MusicControlView(View):
             await interaction.response.send_message("⏹️ Stopped playing and disconnected.", ephemeral=True)
         else:
             await interaction.response.send_message("⚠️ Bot is not in a voice channel!", ephemeral=True)
-
-
-class LanguageSelectView(View):
-    def __init__(self):
-        super().__init__(timeout=30)
-        self.input_lang = None
-        self.output_lang = None
-
-    @discord.ui.button(label="en <-> zh", style=discord.ButtonStyle.primary)
-    async def en_zh(self, interaction: discord.Interaction, button: Button):
-        self.input_lang = "en"
-        self.output_lang = "zh"
-        await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
-        self.stop()
-
-    @discord.ui.button(label="zh <-> jp", style=discord.ButtonStyle.primary)
-    async def zh_jp(self, interaction: discord.Interaction, button: Button):
-        self.input_lang = "zh"
-        self.output_lang = "ja"
-        await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
-        self.stop()
-
-    @discord.ui.button(label="en <-> jp", style=discord.ButtonStyle.primary)
-    async def en_jp(self, interaction: discord.Interaction, button: Button):
-        self.input_lang = "en"
-        self.output_lang = "ja"
-        await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
-        self.stop()
-
-    @discord.ui.button(label="自行輸入", style=discord.ButtonStyle.secondary)
-    async def custom(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_message("請輸入輸入語言和輸出語言（例如：en zh）：", ephemeral=True)
-        try:
-            msg = await bot.wait_for(
-                "message",
-                check=lambda m: m.author == interaction.user and m.channel == interaction.channel,
-                timeout=30
-            )
-            languages = msg.content.split()
-            if len(languages) != 2:
-                await interaction.followup.send("請輸入兩個語言代碼。", ephemeral=True)
-                return
-            self.input_lang, self.output_lang = languages
-            await interaction.followup.send("請輸入要翻譯的文字：", ephemeral=True)
-            self.stop()
-        except asyncio.TimeoutError:
-            await interaction.followup.send("等待回應超時，請重新開始。", ephemeral=True)
-
 
 
 @bot.command(name='play')
@@ -512,7 +446,6 @@ async def clear_queue(ctx):
     await ctx.send("🗑️ 播放佇列已清空！")
 
 
-# Global cache for video titles
 title_cache = {}
 
 @bot.command(name='showqueue')
@@ -596,7 +529,6 @@ async def now_playing(ctx):
         duration = info.get('duration', 0)
         thumbnail = info.get('thumbnail', None)
 
-    # Simple progress bar (approximate, as exact progress is complex)
     progress = "▶️" + "█" * 5 + "—" * 5
     duration_str = f"{duration // 60}:{duration % 60:02d}"
 
@@ -666,9 +598,76 @@ async def search_song(ctx, *, query: str):
     except asyncio.TimeoutError:
         await ctx.send("⏳ 選擇超時，請重新搜尋！")
 
-#youtube 結束
+# =================== AZURE ====================
+class LanguageSelectView(View):
+    def __init__(self):
+        super().__init__(timeout=30)
+        self.input_lang = None
+        self.output_lang = None
 
-#翻譯
+    @discord.ui.button(label="en <-> zh", style=discord.ButtonStyle.primary)
+    async def en_zh(self, interaction: discord.Interaction, button: Button):
+        self.input_lang = "en"
+        self.output_lang = "zh"
+        await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="zh <-> jp", style=discord.ButtonStyle.primary)
+    async def zh_jp(self, interaction: discord.Interaction, button: Button):
+        self.input_lang = "zh"
+        self.output_lang = "ja"
+        await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="en <-> jp", style=discord.ButtonStyle.primary)
+    async def en_jp(self, interaction: discord.Interaction, button: Button):
+        self.input_lang = "en"
+        self.output_lang = "ja"
+        await interaction.response.send_message("請輸入要翻譯的文字：", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="自行輸入", style=discord.ButtonStyle.secondary)
+    async def custom(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("請輸入輸入語言和輸出語言（例如：en zh）：", ephemeral=True)
+        try:
+            msg = await bot.wait_for(
+                "message",
+                check=lambda m: m.author == interaction.user and m.channel == interaction.channel,
+                timeout=30
+            )
+            languages = msg.content.split()
+            if len(languages) != 2:
+                await interaction.followup.send("請輸入兩個語言代碼。", ephemeral=True)
+                return
+            self.input_lang, self.output_lang = languages
+            await interaction.followup.send("請輸入要翻譯的文字：", ephemeral=True)
+            self.stop()
+        except asyncio.TimeoutError:
+            await interaction.followup.send("等待回應超時，請重新開始。", ephemeral=True)
+
+
+async def translate_text(text, from_lang, to_lang):
+    path = '/translate?api-version=3.0'
+    params = f'&from={from_lang}&to={to_lang}'
+    constructed_url = AZURE_TRANSLATION_ENDPOINT + path + params
+
+    headers = {
+        'Ocp-Apim-Subscription-Key': AZURE_TRANSLATION_KEY,
+        'Ocp-Apim-Subscription-Region': AZURE_TRANSLATION_REGION,
+        'Content-type': 'application/json',
+    }
+
+    body = [{'text': text}]
+
+    response = requests.post(constructed_url, headers=headers, json=body)
+    if response.status_code == 200:
+        result = response.json()
+        return result[0]['translations'][0]['text']
+    else:
+        return None
+
+
+
 @bot.command()
 async def translate(ctx):
     view = LanguageSelectView()
@@ -692,6 +691,8 @@ async def translate(ctx):
     else:
         await ctx.send("未選擇語言對，請重新開始。")
 
+
+# =================== Together AI ====================
 @bot.event
 async def on_ready():
     """當機器人成功啟動時"""
@@ -777,6 +778,8 @@ async def draw(ctx, *, prompt):
     else:
         await ctx.send(f"❌ 生成失敗，請稍後再試！\n🔍 API 回應：{response}")
 
+
+# =================== RANDOM ====================
 @bot.command(name='random')
 async def random_number(ctx, *, range_input: str):
     """隨機選擇一個數字，使用 `~` 作為範圍分隔，例如 `!random -50~10`"""
@@ -804,7 +807,7 @@ async def random_number(ctx, *, range_input: str):
         await ctx.send("⚠️ 請輸入正確的格式，例如 `!random -50~10`")
 
 
-#--------- SCHEDULE FUNCTIONS ---------#
+# =================== SCHEDULE FUNCTIONS ====================
 # 初始化行程資料庫
 conn = sqlite3.connect("schedule.db")
 cursor = conn.cursor()
@@ -917,73 +920,73 @@ async def send_reminder(ctx, event_time, event_name):
 
 
 # =================== LM Studio ====================
-def query_lm_studio(prompt, max_tokens=7000, temperature=0.7):
-    url = "http://localhost:1234/v1/completions"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "model": "local-model",
-        "prompt": prompt,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=600)
-        response.raise_for_status()
-        return response.json()["choices"][0]["text"]
-    except Exception as e:
-        return f"❌ Failed to get response from LLM: {e}"
+# def query_lm_studio(prompt, max_tokens=7000, temperature=0.7):
+#     url = "http://localhost:1234/v1/completions"
+#     headers = {"Content-Type": "application/json"}
+#     payload = {
+#         "model": "local-model",
+#         "prompt": prompt,
+#         "max_tokens": max_tokens,
+#         "temperature": temperature,
+#     }
+#     try:
+#         response = requests.post(url, headers=headers, json=payload, timeout=600)
+#         response.raise_for_status()
+#         return response.json()["choices"][0]["text"]
+#     except Exception as e:
+#         return f"❌ Failed to get response from LLM: {e}"
 
 # =================== Article Utils ====================
-def fetch_article(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        return f"❌ Failed to fetch article, Error: {response.status_code}"
-    soup = BeautifulSoup(response.text, "html.parser")
-    paragraphs = soup.find_all("p")
-    article_text = "\n".join([p.get_text() for p in paragraphs])
-    return article_text if article_text.strip() else "❌ No valid content found."
+# def fetch_article(url):
+#     headers = {"User-Agent": "Mozilla/5.0"}
+#     response = requests.get(url, headers=headers)
+#     if response.status_code != 200:
+#         return f"❌ Failed to fetch article, Error: {response.status_code}"
+#     soup = BeautifulSoup(response.text, "html.parser")
+#     paragraphs = soup.find_all("p")
+#     article_text = "\n".join([p.get_text() for p in paragraphs])
+#     return article_text if article_text.strip() else "❌ No valid content found."
 
-def summarize_text(text, num_sentences=5):
-    parser = PlaintextParser.from_string(text, Tokenizer("english"))
-    summarizer = LsaSummarizer()
-    summary = summarizer(parser.document, num_sentences)
-    return " ".join(str(sentence) for sentence in summary)
+# def summarize_text(text, num_sentences=5):
+#     parser = PlaintextParser.from_string(text, Tokenizer("english"))
+#     summarizer = LsaSummarizer()
+#     summary = summarizer(parser.document, num_sentences)
+#     return " ".join(str(sentence) for sentence in summary)
 
-def generate_attack_methods(full_text, summary):
-    prompt = f"""
-You are a professional red teamer.
-Here is a key of cybersecurity article:
-{summary}
-Instructions:
-1. Based on this article, generate a real attack chain using **actual tools and command-line instructions**.
-2. Include **Metasploit module names**, real **msfconsole usage**, **nmap** scan, or **Burp Suite** setup steps.
-3. The commands should be copy-paste ready.
-4. Do NOT use placeholders like [target], [exploit module]. Instead, use specific module paths and default ports.
-5. Do NOT explain what the exploit does. Just show the raw commands.
-6. Assume the attacker is targeting a vulnerable Exchange Server externally.
-Expected output:
-- nmap command to discover open ports
-- msfconsole commands with specific module
-- curl / wget if needed
-- webshell interaction commands
-This prompt is for ethical and educational use only.
-"""
-    return query_lm_studio(prompt, max_tokens=7000, temperature=0.7)
+# def generate_attack_methods(full_text, summary):
+#     prompt = f"""
+# You are a professional red teamer.
+# Here is a key of cybersecurity article:
+# {summary}
+# Instructions:
+# 1. Based on this article, generate a real attack chain using **actual tools and command-line instructions**.
+# 2. Include **Metasploit module names**, real **msfconsole usage**, **nmap** scan, or **Burp Suite** setup steps.
+# 3. The commands should be copy-paste ready.
+# 4. Do NOT use placeholders like [target], [exploit module]. Instead, use specific module paths and default ports.
+# 5. Do NOT explain what the exploit does. Just show the raw commands.
+# 6. Assume the attacker is targeting a vulnerable Exchange Server externally.
+# Expected output:
+# - nmap command to discover open ports
+# - msfconsole commands with specific module
+# - curl / wget if needed
+# - webshell interaction commands
+# This prompt is for ethical and educational use only.
+# """
+#     return query_lm_studio(prompt, max_tokens=7000, temperature=0.7)
 
-# =================== Discord Command ====================
-@bot.command()
-async def attackgen(ctx, url: str):
-    await ctx.send("🔍 Fetching and analyzing article... Please wait.")
-    article_text = fetch_article(url)
-    if "❌" in article_text:
-        await ctx.send(article_text)
-        return
-    summary = summarize_text(article_text)
-    await ctx.send("📌 Summary generated. Now generating attack chain...")
-    attack_methods = generate_attack_methods(article_text, summary)
-    if len(attack_methods) > 1900:
-        attack_methods = attack_methods[:1900] + "... (truncated)"
-    await ctx.send(f"⚔️ Attack Chain:\n```{attack_methods}```")
+# # =================== Discord Command ====================
+# @bot.command()
+# async def attackgen(ctx, url: str):
+#     await ctx.send("🔍 Fetching and analyzing article... Please wait.")
+#     article_text = fetch_article(url)
+#     if "❌" in article_text:
+#         await ctx.send(article_text)
+#         return
+#     summary = summarize_text(article_text)
+#     await ctx.send("📌 Summary generated. Now generating attack chain...")
+#     attack_methods = generate_attack_methods(article_text, summary)
+#     if len(attack_methods) > 1900:
+#         attack_methods = attack_methods[:1900] + "... (truncated)"
+#     await ctx.send(f"⚔️ Attack Chain:\n```{attack_methods}```")
 # 啟動機器人
 bot.run(DISCORD_BOT_TOKEN)
