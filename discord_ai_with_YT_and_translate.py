@@ -21,50 +21,120 @@ from sumy.summarizers.lsa import LsaSummarizer
 
 load_dotenv(override=True)
 
-# Together API Key（請使用新生成的 API Key）
 TOGETHER_API_KEY = os.getenv("together_api_key")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-#AZURE_TRANSLATION_KEY = os.getenv('AZURE_TRANSLATION_KEY')
-#AZURE_TRANSLATION_ENDPOINT = os.getenv('AZURE_TRANSLATION_ENDPOINT')
-#AZURE_TRANSLATION_REGION = os.getenv('AZURE_TRANSLATION_REGION')
+AZURE_TRANSLATION_KEY = os.getenv('AZURE_TRANSLATION_KEY')
+AZURE_TRANSLATION_ENDPOINT = os.getenv('AZURE_TRANSLATION_ENDPOINT')
+AZURE_TRANSLATION_REGION = os.getenv('AZURE_TRANSLATION_REGION')
 
 if not DISCORD_BOT_TOKEN:
     raise ValueError("❌ Discord  API Key 未設定，請確認環境變數！")
 if not  TOGETHER_API_KEY:
     raise ValueError("❌ Together API Key 未設定，請確認環境變數！")
-'''if not AZURE_TRANSLATION_KEY:
+if not AZURE_TRANSLATION_KEY:
     raise ValueError("❌ Azure Translation Key 未設定，請確認環境變數！")
 if not AZURE_TRANSLATION_ENDPOINT:
     raise ValueError("❌ Azure Translation Endpoint 未設定，請確認環境變數！")
 if not AZURE_TRANSLATION_REGION:
     raise ValueError("❌ Azure Translation Region 未設定，請確認環境變數！")
-'''
+
 # 啟用 intents
 intents = discord.Intents.default()
 intents.message_content = True  # 需要啟用以讀取訊息
 
 # 建立 Discord Bot
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+bot.help_command = None # 這東西查document查了1小時..........................................................................................哭阿!
+
+@bot.command(name='help')
+async def help(ctx):
+    embed = discord.Embed(
+        title="🤖 完整指令手冊 📚",
+        description="【所有可用功能列表】",
+        color=0x00ffd5
+    )
+
+
+    embed.add_field(
+        name="🎵 音樂控制指令",
+        value="""```ini
+!play [關鍵字/連結] - 播放YouTube音樂
+!pause              - 暫停當前曲目
+!resume             - 恢復播放
+!next               - 跳至下一首
+!stop               - 停止並離開頻道
+!queue [關鍵字/連結] - 添加歌曲到佇列
+!showqueue          - 顯示當前播放佇列
+!clearqueue         - 清空播放佇列
+!loop [song/queue/off] - 啟用/關閉單曲或佇列循環
+!nowplaying         - 顯示當前播放歌曲資訊
+!search [關鍵字]    - 搜尋YouTube歌曲並選擇播放```""",
+        inline=False
+    )
+
+
+    embed.add_field(
+        name="📆 行程管理指令",
+        value="""```ini
+!schedule       - 顯示所有行程
+!add            - 新增行程 (互動式)
+!delete [ID]      - 刪除指定行程```""",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🤖 AI功能指令",
+        value="""```ini
+!translate      - 啟動多語言翻譯
+!chat [訊息]      - 與AI對話 (Llama3-70B)
+!draw [提示詞]  - AI繪圖 (Stable Diffusion)
+!attackgen      - (測試版) 生成攻擊指令```""",
+        inline=False
+    )
+
+
+    embed.add_field(
+        name="🛠️ 實用工具指令",
+        value="""```ini
+!random [範圍]    - 隨機數字 (例: -50~10)
+!help           - 顯示本幫助訊息```""",
+        inline=False
+    )
+
+    embed.set_thumbnail(url="https://example.com/help_icon.png")
+    await ctx.send(embed=embed)
+
+
+
 #YOUTUBE 設定
 YTDLP_OPTIONS = {
-    'format': 'bestaudio/best',
+    'format': 'bestaudio/best[ext=m4a]/bestaudio/best[ext=webm]/bestaudio',  # Prefer m4a, then webm
     'quiet': True,
-    'extract_flat': True,  # Prevents downloading extra metadata
+    'no_warnings': False,  # Enable warnings temporarily for debugging
+    'extract_flat': False,  # Fetch full metadata for better stream selection
     'noplaylist': True,
     'default_search': 'ytsearch',
+    'geo_bypass': True,
+    'nocheckcertificate': True,
+    'retries': 5,
+    'fragment_retries': 5,
+    'socket_timeout': 15,
+    'force_generic_extractor': False,  # Allow YouTube-specific extractor
 }
 
 
 FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn'
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 20000000',
+    'options': '-vn -bufsize 128k'
 }
 
 youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 
 queue = []
 search_cache = {}
+
 async def get_most_popular_video(query):
     """搜尋與 `query` 最相關的影片，然後選擇觀看次數最高的"""
     try:
@@ -109,7 +179,7 @@ async def fetch_related_video(url):
             return f"https://www.youtube.com/watch?v={related_videos[0]['id']}"
         return None
 
-'''async def translate_text(text, from_lang, to_lang):
+async def translate_text(text, from_lang, to_lang):
     path = '/translate?api-version=3.0'
     params = f'&from={from_lang}&to={to_lang}'
     constructed_url = AZURE_TRANSLATION_ENDPOINT + path + params
@@ -128,7 +198,80 @@ async def fetch_related_video(url):
         return result[0]['translations'][0]['text']
     else:
         return None
-'''
+
+
+async def play_next(ctx, voice_client):
+    """播放佇列中的下一首歌並支援循環，處理下載失敗"""
+    global loop_mode
+
+    if loop_mode == 'song' and hasattr(voice_client, 'last_url'):
+        url = voice_client.last_url
+    elif loop_mode == 'queue' and queue:
+        url = queue[0]
+        queue.append(queue[0])
+        queue.pop(0)
+    elif queue:
+        url = queue.pop(0)
+    else:
+        await ctx.send("✅ 佇列已空，斷開連線...")
+        await voice_client.disconnect()
+        return
+
+    voice_client.last_url = url
+    await ctx.send(f"🎵 正在播放：{url}")
+
+    def get_audio_url(attempt=1, max_attempts=3):
+        try:
+            with yt_dlp.YoutubeDL(YTDLP_OPTIONS) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if not info or 'url' not in info:
+                    raise Exception("No audio URL found")
+                print(f"🎵 選定格式 [{url}]: {info.get('format_id', '未知')}")
+                return info['url']
+        except Exception as e:
+            print(f"❌ 音頻提取失敗 [嘗試 {attempt}/{max_attempts}, {url}]: {e}")
+            if attempt < max_attempts:
+                print(f"重試提取 [{url}]...")
+                return get_audio_url(attempt + 1, max_attempts)
+            return None
+
+    audio_url = await asyncio.to_thread(get_audio_url)
+    if not audio_url:
+        await ctx.send(f"❌ 無法播放歌曲：{url}，可能由於格式或網路問題，跳至下一首...")
+        asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
+        return
+
+    def after_playback(e):
+        if e:
+            print(f"❌ 播放錯誤 [{url}]: {e}")
+        else:
+            print(f"✅ 播放完成 [{url}]")
+        asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
+
+    try:
+        import time
+        source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS)
+        start_time = time.time()
+        voice_client.play(source, after=after_playback)
+        await asyncio.sleep(1)  # Brief wait to check playback
+        if not voice_client.is_playing():
+            print(f"⚠️ 播放未開始 [{url}]")
+            await ctx.send(f"⚠️ 無法播放歌曲：{url}，播放未開始，跳至下一首...")
+            asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
+            return
+        while voice_client.is_playing() or voice_client.is_paused():
+            await asyncio.sleep(1)
+        playback_duration = time.time() - start_time
+        print(f"🎵 播放持續時間 [{url}]: {playback_duration:.2f} 秒")
+        if playback_duration < 5:  # Detect short playback
+            print(f"⚠️ 播放時間過短 [{url}]: {playback_duration:.2f} 秒")
+            await ctx.send(f"⚠️ 歌曲播放失敗或過短：{url}，跳至下一首...")
+            asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
+    except Exception as e:
+        print(f"❌ FFmpeg 播放失敗 [{url}]: {e}")
+        await ctx.send(f"❌ 無法播放歌曲：{url}，FFmpeg 錯誤，跳至下一首...")
+        asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
+        return
 
 class MusicControlView(View):
     def __init__(self, ctx, voice_client):
@@ -170,7 +313,6 @@ class MusicControlView(View):
             await interaction.response.send_message("⚠️ Bot is not in a voice channel!", ephemeral=True)
 
 
-'''
 class LanguageSelectView(View):
     def __init__(self):
         super().__init__(timeout=30)
@@ -216,22 +358,22 @@ class LanguageSelectView(View):
             self.stop()
         except asyncio.TimeoutError:
             await interaction.followup.send("等待回應超時，請重新開始。", ephemeral=True)
-'''
+
 
 
 @bot.command(name='play')
 async def play(ctx, *, query: str):
-    """播放歌曲，允許使用 YouTube 連結或關鍵字搜尋，並提供播放控制按鈕"""
+    """播放歌曲，允許使用 YouTube 連結或關鍵字搜尋，並提供插隊選項"""
+    # Search for the song
     if "youtube.com" not in query and "youtu.be" not in query:
         url = await get_most_popular_video(query)
         if not url:
             await ctx.send(f"❌ 找不到 `{query}` 的 YouTube 音樂，請嘗試使用更準確的名稱！")
             return
     else:
-        url = query  # 如果使用者提供的是 YouTube 連結，直接使用
+        url = query
 
-    queue.append(url)
-
+    # Check if user is in a voice channel
     if not ctx.author.voice:
         await ctx.send("❌ 你需要先加入語音頻道！")
         return
@@ -239,6 +381,7 @@ async def play(ctx, *, query: str):
     voice_channel = ctx.author.voice.channel
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
 
+    # Connect or move to the correct voice channel
     if voice_client and voice_client.is_connected():
         if voice_client.channel != voice_channel:
             await voice_client.move_to(voice_channel)
@@ -248,72 +391,58 @@ async def play(ctx, *, query: str):
     # Create music control buttons
     view = MusicControlView(ctx, voice_client)
 
-    # Send a message with embedded buttons
-    embed = discord.Embed(title="🎶 Now Playing", description=f"[Click here to watch]({url})", color=discord.Color.blue())
-    embed.set_footer(text="Use the buttons below to control the playback.")
+    # If a song is currently playing, prompt user for placement
+    if voice_client.is_playing():
+        embed = discord.Embed(
+            title="🎶 歌曲已加入",
+            description="目前有歌曲正在播放，請選擇：\n- `now`: 暫停當前歌曲，將其加入佇列最前並立即播放新歌曲\n- `next`: 將新歌曲設為下一首（插隊到佇列最前）\n- `queue`: 將新歌曲加入佇列最後",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="歌曲", value=f"[Click here to watch]({url})", inline=False)
+        await ctx.send(embed=embed)
 
-    await ctx.send(embed=embed, view=view)
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel and m.content.lower() in ['now', 'next', 'queue']
 
-    # Start playing if nothing is currently playing
-    if not voice_client.is_playing():
+        try:
+            msg = await bot.wait_for("message", check=check, timeout=30)
+            choice = msg.content.lower()
+
+            if choice == 'now':
+                # Pause the current song
+                voice_client.pause()
+                # Add the current song to the front of the queue
+                if hasattr(voice_client, 'last_url'):
+                    queue.insert(0, voice_client.last_url)
+                # Add the new song to the queue and play it immediately
+                queue.insert(0, url)
+                await ctx.send(f"✅ 正在播放新歌曲：{url}")
+                await play_next(ctx, voice_client)
+            elif choice == 'next':
+                queue.insert(0, url)  # Insert at the beginning of the queue (next song)
+                await ctx.send(f"✅ 已將歌曲設為下一首：{url}")
+            elif choice == 'queue':
+                queue.append(url)  # Append to the end of the queue
+                await ctx.send(f"✅ 已加入佇列最後：{url}")
+
+        except asyncio.TimeoutError:
+            await ctx.send("⏳ 選擇超時，歌曲已加入佇列最後")
+            queue.append(url)  # Default to appending to the queue
+    else:
+        # If nothing is playing, add to queue and start playing
+        queue.append(url)
+        embed = discord.Embed(
+            title="🎶 Now Playing",
+            description=f"[Click here to watch]({url})",
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="Use the buttons below to control the playback.")
+        await ctx.send(embed=embed, view=view)
         await play_next(ctx, voice_client)
 
-async def play_next(ctx, voice_client):
-    """Plays the next song in the queue and ensures completion"""
-    if not queue:
-        await ctx.send("✅ Queue is empty. Disconnecting...")
-        await voice_client.disconnect()
-        return
 
-    url = queue.pop(0)
-    voice_client.last_url = url  # Store last played URL
-    await ctx.send(f"🎵 Now playing: {url}")
 
-    def get_audio_url():
-        with yt_dlp.YoutubeDL({'format': 'bestaudio/best', 'quiet': True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info['url']
 
-    audio_url = await asyncio.to_thread(get_audio_url)  # Fetch in a separate thread
-
-    def after_playback(e):
-        if e:
-            print(f"Playback error: {e}")
-        asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop)
-
-    # Ensure FFmpeg does not get interrupted
-    source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS)
-    voice_client.play(source, after=after_playback)
-
-    # 🔹 Wait for the song to finish before allowing another command
-    while voice_client.is_playing() or voice_client.is_paused():
-        await asyncio.sleep(1)
-
-'''
-@bot.command()
-async def translate(ctx):
-    view = LanguageSelectView()
-    await ctx.send("請選擇語言對或自行輸入：", view=view)
-    await view.wait()
-    if view.input_lang and view.output_lang:
-        try:
-            msg = await bot.wait_for(
-                "message",
-                check=lambda m: m.author == ctx.author and m.channel == ctx.channel,
-                timeout=30
-            )
-            text_to_translate = msg.content
-            translation = await translate_text(text_to_translate, view.input_lang, view.output_lang)
-            if translation:
-                await ctx.send(f"翻譯結果：{translation}")
-            else:
-                await ctx.send("翻譯失敗，請檢查語言代碼或稍後再試。")
-        except asyncio.TimeoutError:
-            await ctx.send("等待回應超時，請重新開始。")
-    else:
-        await ctx.send("未選擇語言對，請重新開始。")
-
-'''
 @bot.command(name='pause')
 async def pause(ctx):
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
@@ -343,13 +472,21 @@ async def next_song(ctx):
         await ctx.send("No audio is playing.")
 
 @bot.command(name='queue')
-async def add_to_queue(ctx, *, url: str):
+async def add_to_queue(ctx, *, query: str):
+    """將歌曲加入播放佇列，允許使用 YouTube 連結或關鍵字搜尋"""
+    if "youtube.com" not in query and "youtu.be" not in query:
+        url = await get_most_popular_video(query)
+        if not url:
+            await ctx.send(f"❌ 找不到 `{query}` 的 YouTube 音樂，請嘗試使用更準確的名稱！")
+            return
+    else:
+        url = query  
+
     queue.append(url)
-    await ctx.send(f"Added to queue: {url}")
+    await ctx.send(f"✅ 已加入佇列：{url}")
 
     voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
 
-    # Start playing automatically if the bot is connected but idle
     if voice_client and not voice_client.is_playing():
         await play_next(ctx, voice_client)
 
@@ -363,7 +500,198 @@ async def stop(ctx):
         await ctx.send("已停止播放並離開語音頻道。")
     else:
         await ctx.send("機器人沒有在語音頻道中！")
+
+
+@bot.command(name='clearqueue')
+async def clear_queue(ctx):
+    """清空播放佇列"""
+    if not queue:
+        await ctx.send("📭 播放佇列已經是空的！")
+        return
+    queue.clear()
+    await ctx.send("🗑️ 播放佇列已清空！")
+
+
+# Global cache for video titles
+title_cache = {}
+
+@bot.command(name='showqueue')
+async def show_queue(ctx):
+    """顯示當前播放佇列"""
+    if not queue:
+        await ctx.send("📭 播放佇列目前是空的！")
+        return
+
+    embed = discord.Embed(title="🎶 播放佇列", color=discord.Color.blue())
+
+    async def get_title(url):
+        if url in title_cache:
+            return title_cache[url]
+        try:
+            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'extract_flat': True}) as ydl:
+                info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+                title = info.get('title', 'Unknown Title')
+                title_cache[url] = title
+                return title
+        except Exception as e:
+            print(f"❌ 無法獲取標題 [{url}]: {e}")
+            return 'Unknown Title'
+
+    for i, url in enumerate(queue, 1):
+        title = await get_title(url)
+        embed.add_field(
+            name=f"#{i}",
+            value=f"[{title}]({url})",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
+
+loop_mode = None 
+
+@bot.command(name='loop')
+async def loop(ctx, mode: str = None):
+    """啟用/關閉單曲或佇列循環（!loop song 或 !loop queue）"""
+    global loop_mode
+    voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
+
+    if not voice_client or not voice_client.is_connected():
+        await ctx.send("⚠️ 機器人未連接到語音頻道！")
+        return
+
+    if mode is None or mode.lower() not in ['song', 'queue', 'off']:
+        await ctx.send("⚠️ 請指定模式：`!loop song`, `!loop queue`, 或 `!loop off`")
+        return
+
+    mode = mode.lower()
+    if mode == 'off':
+        loop_mode = None
+        await ctx.send("🔄 循環已關閉")
+    elif mode == 'song':
+        loop_mode = 'song'
+        await ctx.send("🔂 已啟用單曲循環")
+    elif mode == 'queue':
+        loop_mode = 'queue'
+        await ctx.send("🔁 已啟用佇列循環")
+
+
+
+@bot.command(name='nowplaying')
+async def now_playing(ctx):
+    """顯示當前播放的歌曲資訊"""
+    voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
+    if not voice_client or not voice_client.is_playing():
+        await ctx.send("⚠️ 目前沒有歌曲在播放！")
+        return
+
+    url = getattr(voice_client, 'last_url', None)
+    if not url:
+        await ctx.send("⚠️ 無法獲取當前歌曲資訊！")
+        return
+
+    with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        title = info.get('title', 'Unknown Title')
+        duration = info.get('duration', 0)
+        thumbnail = info.get('thumbnail', None)
+
+    # Simple progress bar (approximate, as exact progress is complex)
+    progress = "▶️" + "█" * 5 + "—" * 5
+    duration_str = f"{duration // 60}:{duration % 60:02d}"
+
+    embed = discord.Embed(title="🎵 正在播放", color=discord.Color.green())
+    embed.add_field(name="標題", value=f"[{title}]({url})", inline=False)
+    embed.add_field(name="時長", value=duration_str, inline=True)
+    embed.add_field(name="進度", value=progress, inline=True)
+    if thumbnail:
+        embed.set_thumbnail(url=thumbnail)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='search')
+async def search_song(ctx, *, query: str):
+    """搜尋 YouTube 歌曲並讓使用者選擇"""
+    search_response = youtube.search().list(
+        q=query,
+        part="snippet",
+        maxResults=5,
+        type="video"
+    ).execute()
+
+    if not search_response["items"]:
+        await ctx.send(f"❌ 找不到 `{query}` 的結果！")
+        return
+
+    embed = discord.Embed(title="🔍 搜尋結果", description="請選擇一首歌曲（輸入 1-5）", color=discord.Color.blue())
+    options = []
+    for i, item in enumerate(search_response["items"], 1):
+        title = item["snippet"]["title"]
+        video_id = item["id"]["videoId"]
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        options.append(url)
+        embed.add_field(name=f"{i}. {title}", value=f"[觀看]({url})", inline=False)
+
+    await ctx.send(embed=embed)
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel and m.content.isdigit() and 1 <= int(m.content) <= 5
+
+    try:
+        msg = await bot.wait_for("message", check=check, timeout=30)
+        choice = int(msg.content) - 1
+        selected_url = options[choice]
+        queue.append(selected_url)
+        await ctx.send(f"✅ 已加入佇列：{selected_url}")
+
+        voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
+        
+        # Check if queue was empty and nothing is playing, then start playing immediately
+        if not queue[:-1] and (not voice_client or not voice_client.is_playing()):
+            if not ctx.author.voice:
+                await ctx.send("❌ 你需要先加入語音頻道！")
+                queue.pop()  # Remove the added song if user is not in voice channel
+                return
+            voice_channel = ctx.author.voice.channel
+            if voice_client and voice_client.is_connected():
+                if voice_client.channel != voice_channel:
+                    await voice_client.move_to(voice_channel)
+            else:
+                voice_client = await voice_channel.connect()
+            await play_next(ctx, voice_client)
+        # If something is playing or queue is not empty, just add to queue
+        elif voice_client and not voice_client.is_playing():
+            await play_next(ctx, voice_client)
+
+    except asyncio.TimeoutError:
+        await ctx.send("⏳ 選擇超時，請重新搜尋！")
+
 #youtube 結束
+
+#翻譯
+@bot.command()
+async def translate(ctx):
+    view = LanguageSelectView()
+    await ctx.send("請選擇語言對或自行輸入：", view=view)
+    await view.wait()
+    if view.input_lang and view.output_lang:
+        try:
+            msg = await bot.wait_for(
+                "message",
+                check=lambda m: m.author == ctx.author and m.channel == ctx.channel,
+                timeout=30
+            )
+            text_to_translate = msg.content
+            translation = await translate_text(text_to_translate, view.input_lang, view.output_lang)
+            if translation:
+                await ctx.send(f"翻譯結果：{translation}")
+            else:
+                await ctx.send("翻譯失敗，請檢查語言代碼或稍後再試。")
+        except asyncio.TimeoutError:
+            await ctx.send("等待回應超時，請重新開始。")
+    else:
+        await ctx.send("未選擇語言對，請重新開始。")
+
 @bot.event
 async def on_ready():
     """當機器人成功啟動時"""
