@@ -833,10 +833,15 @@ async def on_ready():
 async def start_scheduler():
     scheduler.start()
 
+def remove_past_schedules():
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    cursor.execute("DELETE FROM schedules WHERE time < ?", (now,))
+    conn.commit()
 
 # 📌 指令：新增行程
 @bot.command()
 async def add(ctx):
+    remove_past_schedules()
     await ctx.send("📅 請輸入你的行程（格式：MM/DD HH:MM 事件）")
 
     def check(m):
@@ -848,7 +853,7 @@ async def add(ctx):
         if len(parts) < 3:
             await ctx.send("⚠️ 格式錯誤！請使用 'MM/DD HH:MM 事件'")
             return
-
+        
         # 解析時間
         date_str = f"{datetime.datetime.now().year}/{parts[0]} {parts[1]}"
         event_time = datetime.datetime.strptime(date_str, "%Y/%m/%d %H:%M")
@@ -869,7 +874,7 @@ async def add(ctx):
         conn.commit()
 
         await ctx.send(f"✅ 行程已新增：{event_time.strftime('%m/%d %H:%M')} {event_name}")
-
+        
         # 設定提醒
         if remind_before > 0:
             remind_time = event_time - datetime.timedelta(minutes=remind_before)
@@ -881,43 +886,58 @@ async def add(ctx):
 # 📌 指令：查看行程
 @bot.command()
 async def schedule(ctx):
-    cursor.execute("SELECT time, event FROM schedules WHERE user_id = ? ORDER BY time ASC", (ctx.author.id,))
+    remove_past_schedules()
+    cursor.execute("SELECT rowid, time, event FROM schedules WHERE user_id = ? ORDER BY time ASC", (ctx.author.id,))
     schedules = cursor.fetchall()
 
     if not schedules:
         await ctx.send("📭 目前沒有行程")
     else:
-        msg = "**📅 你的行程：**\n" + "\n".join([f"📌 {s[0]} - {s[1]}" for s in schedules])
+        msg = "**📅 你的行程：**\n"
+        for idx, s in enumerate(schedules, start=1):
+            msg += f"{idx}. 📌 {s[1]} - {s[2]}\n"
         await ctx.send(msg)
 
 # 📌 指令：刪除行程
 @bot.command()
 async def delete(ctx):
-    await ctx.send("📌 請輸入要刪除的行程編號（使用 `!schedule` 查看編號）")
+    # 先撈取排序後的行程列表
+    cursor.execute("SELECT rowid, time, event FROM schedules WHERE user_id = ? ORDER BY time ASC", (ctx.author.id,))
+    schedules = cursor.fetchall()
+
+    if not schedules:
+        await ctx.send("📭 沒有行程可刪除")
+        return
+
+    msg = "**🗑️ 請輸入要刪除的行程編號（前面數字）：**\n"
+    for idx, s in enumerate(schedules, start=1):
+        msg += f"{idx}. 📌 {s[1]} - {s[2]}\n"
+    await ctx.send(msg)
 
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
 
     try:
-        msg = await bot.wait_for("message", check=check, timeout=30)
-        event_id = int(msg.content)
+        reply = await bot.wait_for("message", check=check, timeout=30)
+        idx_to_delete = int(reply.content)
 
-        cursor.execute("DELETE FROM schedules WHERE rowid = ? AND user_id = ?", (event_id, ctx.author.id))
+        if idx_to_delete < 1 or idx_to_delete > len(schedules):
+            await ctx.send("⚠️ 無效的編號，請重新輸入！")
+            return
+
+        rowid = schedules[idx_to_delete - 1][0]
+        cursor.execute("DELETE FROM schedules WHERE rowid = ? AND user_id = ?", (rowid, ctx.author.id))
         conn.commit()
 
-        if cursor.rowcount > 0:
-            await ctx.send("✅ 行程已刪除！")
-        else:
-            await ctx.send("⚠️ 找不到該行程，請確認編號是否正確！")
+        await ctx.send("✅ 行程已刪除！")
 
-    except asyncio.TimeoutError:
-        await ctx.send("⏳ 超時未輸入，請重新輸入指令！")
+    except (asyncio.TimeoutError, ValueError):
+        await ctx.send("⏳ 超時或格式錯誤，請重新輸入指令！")
+
 
 # 📌 提醒函式
 async def send_reminder(ctx, event_time, event_name):
     await ctx.send(f"🔔 提醒：{event_name} 將在 {event_time.strftime('%H:%M')} 開始！")
-
-
 
 # =================== LM Studio ====================
 # def query_lm_studio(prompt, max_tokens=7000, temperature=0.7):
